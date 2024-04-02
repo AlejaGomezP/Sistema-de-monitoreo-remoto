@@ -1,0 +1,303 @@
+// PROTOCOLO MODULO DE SUELO
+
+#include <avr/io.h>
+#define F_CPU 20000000UL / 6 // Define CPU frequency (20 MHz / 6)
+#define F_PER 20000000UL / 6 // Define PERIPHERAL frequency (20 MHz / 6)
+#define F_BAUD 9600 // Define BAUD frequency
+#include <util/delay.h>
+#include <stdint.h>
+#define ARRAY_SIZE 6
+
+// VARIABLES PROTOCOLO
+
+uint8_t Message_Type = 0x01; // Slave_responde (1)
+uint8_t Command_Type = 0x00; // Read (0)
+uint8_t Module = 0x03; // MVS (3)
+uint8_t temperatura_suelo = 0x05; // (5)
+uint8_t humedad_suelo = 0x06; // (6)
+
+// VARIABLES HUMEDAD
+
+#define HUMIDITY_PIN PIN1_bm // PB1 Humedad sensor
+#define SENSORS_PORT PORTB
+#define V_REF 5.0 // Reference voltage value
+
+// CONFIGURACION MICRO SENSOR HUMEDAD
+
+void setup() {
+	PORTB.PIN1CTRL = 0x04;
+	ADC0.CTRLA |= ADC_RESSEL_8BIT_gc; // Configurar la resolución escribiendo en el bit Resolution Selection
+	ADC0.CTRLB |= ADC_SAMPNUM_ACC1_gc; //Configurar el numero de muestras a acumular por conversion  (OPCIONAL)
+	ADC0.CTRLC |= ADC_REFSEL_VDDREF_gc; // Configurar una referencia de voltaje
+	ADC0.CTRLC |= ADC_PRESC_DIV256_gc; // Configurar el CLK_ADC
+	//ADC0.CTRLC |= ADC_SAMPCAP_bm;	
+	ADC0.MUXPOS = 0x0A; //  Configurar una entrada
+	//ADC0.EVCTRL = 0; // Habilitar la entrada del Evento de Inicio (OPCIONAL)
+	ADC0.CTRLA |= ADC_ENABLE_bm; // Esta línea habilita el ADC
+}
+
+// VARIABLES TEMPERATURA
+
+#define DS18B20_PIN PIN0_bm // PB0 Pin0 micro
+#define SENSORS_PORT PORTB
+
+// FUNCIONES SENSOR TEMPERATURA
+
+// Function to configure a pin as an output
+void pinModeOutput(uint8_t pin) {
+	PORTA.DIRSET = (1 << pin);
+}
+
+// Function to configure a pin as an input
+void pinModeInput(uint8_t pin) {
+	PORTA.DIRCLR = (1 << pin);
+}
+
+// Function for initialization
+void MASTER_RESET() {
+	volatile int8_t period;
+	
+	SENSORS_PORT.DIRSET = DS18B20_PIN; // Set the pin as an output
+	SENSORS_PORT.OUTCLR = DS18B20_PIN; // Set the pin LOW
+	_delay_us(480);
+	SENSORS_PORT.DIRCLR = DS18B20_PIN; // Set the pin as an input
+	SENSORS_PORT.OUTSET = DS18B20_PIN; // Set the pin HIGH
+	_delay_us(5);
+
+	while (SENSORS_PORT.IN & DS18B20_PIN) {
+		// If the bit is HIGH
+	}
+	
+	period = 0;
+	
+	while (!(SENSORS_PORT.IN & DS18B20_PIN)) {
+		period+=3;
+	}
+
+	if ((period > 60) && (period < 240)) {
+		// hay pulso
+		} else {
+		// no hay pulso
+		while(1);
+	}
+}
+
+// Function to write a bit on the OneWire bus
+void writeBit(uint8_t bit) {
+	if (bit) {
+		SENSORS_PORT.OUTCLR = DS18B20_PIN; // Set the pin LOW
+		SENSORS_PORT.DIRSET = DS18B20_PIN; // Set the pin as an output
+		_delay_us(10);
+		SENSORS_PORT.DIRCLR = DS18B20_PIN; // Set the pin as an input
+		_delay_us(90);
+		} else {
+		SENSORS_PORT.OUTCLR = DS18B20_PIN; // Set the pin LOW
+		SENSORS_PORT.DIRSET = DS18B20_PIN; // Set the pin as an output
+		_delay_us(90);
+		SENSORS_PORT.DIRCLR = DS18B20_PIN; // Set the pin as an input
+		_delay_us(10);
+	}
+}
+
+// Function to read a bit from the OneWire bus
+uint8_t readBit() {
+	uint8_t bit = 0;
+	SENSORS_PORT.OUTCLR = DS18B20_PIN; // Set the pin LOW
+	SENSORS_PORT.DIRSET = DS18B20_PIN; // Set the pin as an output
+	_delay_us(5);
+	SENSORS_PORT.DIRCLR = DS18B20_PIN; // Set the pin as an input
+	_delay_us(5);
+	if (SENSORS_PORT.IN & DS18B20_PIN) {
+		bit = 1;
+	}
+	_delay_us(90);
+	return bit;
+}
+
+// Function to send a byte (8 bits) on the OneWire bus
+void writeByte(uint8_t data) {
+	for (uint8_t i = 0; i < 8; i++) {
+		writeBit(data & 0x01);
+		data >>= 1;
+	}
+}
+
+// Function to read a byte (8 bits) from the OneWire bus
+uint8_t readByte() {
+	uint8_t data = 0;
+	for (uint8_t i = 0; i < 8; i++) {
+		data >>= 1;
+		if (readBit()) {
+			data |= 0x80;
+		}
+	}
+	return data;
+}
+
+// Función de inicialización de UART
+
+void initUART() {
+	
+	PORTA.DIRSET = PIN7_bm; // Configurar el pin DE como salida
+	PORTA.OUTCLR = PIN7_bm;  // CONFIGURAR PARA RECIBIR
+	PORTB.OUTSET = PIN2_bm; // Configurar el pin TxD como alto
+	PORTB.DIRSET = PIN2_bm; // Configurar el pin TxD como salida
+ 	PORTB.DIRCLR = PIN3_bm; // Configurar el pin RxD como entrada
+	USART0.BAUD = (uint16_t)(64 * F_PER / (16UL * F_BAUD)); 	
+	USART0.CTRLC |= USART_CMODE_ASYNCHRONOUS_gc | USART_PMODE_DISABLED_gc | USART_SBMODE_1BIT_gc | USART_CHSIZE_8BIT_gc; // Formato del marco
+	USART0.CTRLB |= USART_RXEN_bm | USART_TXEN_bm; // Habilitar receptor y transmisor
+}
+
+// Función para leer un byte por UART
+
+uint8_t read_Byte() {
+	while (!(USART0.STATUS & USART_RXCIF_bm)) {
+		// Esperar hasta que se reciba un byte
+	}
+	return USART0.RXDATAL; // Leer y devolver el byte recibido
+}
+
+// Función para enviar un byte por UART
+
+uint8_t send_Byte(uint8_t data) {
+	while (!(USART0.STATUS & USART_DREIF_bm)) {
+		// Esperar hasta que el registro de datos de transmisión esté listo para enviar
+	}
+	USART0.TXDATAL = data; // Escribir el byte a enviar en el registro de datos de transmisión 
+	return 1; // indica que se envió con éxito
+}
+
+// FUNCION ENVIAR TODA LA TRAMA 
+
+void send_Bytes(uint8_t variable, uint16_t data_variable) {
+	PORTA.OUTSET = PIN7_bm; 
+	uint8_t length = 2;
+    uint8_t bytesToSend[ARRAY_SIZE];
+    
+    // Primer byte
+    bytesToSend[0] = 0xAA;
+    
+    // Segundo byte
+    bytesToSend[1] = (Message_Type << 6) | (Command_Type << 4) | Module;
+    
+    // Tercer byte
+    bytesToSend[2] = variable;
+    
+    // Cuarto byte
+    bytesToSend[3] = length;
+    
+    // Quinto y sexto byte
+    bytesToSend[4] = (data_variable >> 8) ;
+    bytesToSend[5] = data_variable;
+    
+    // Envío de los bytes por UART
+    for (uint8_t i = 0; i < ARRAY_SIZE; ++i) {
+        send_Byte(bytesToSend[i]);
+    }
+	while (!(USART0.STATUS & USART_TXCIF_bm));
+}
+
+typedef enum {
+	Waiting_Sync,
+	Validate_Header,
+	Validate_Var,
+	}state_t;
+
+void state_machine (){
+	static state_t state = Waiting_Sync; 
+	static volatile uint8_t in;
+	in = read_Byte();
+	uint8_t variable;
+	uint8_t Message_T;
+	uint8_t Command_T;
+	uint8_t Module_ID;
+    uint16_t humidity_int;
+	uint16_t temperature_int;
+	volatile int sensorValue;
+	uint16_t data_variable;
+	switch (state) {
+		case Waiting_Sync:                                                                 // ESTADO 1
+			if (in == 0xAA) {
+				 state = Validate_Header;
+			 }
+			 else {
+				 state = Waiting_Sync;
+			 }
+			break;
+		 case Validate_Header: 
+			Message_T = (in >> 6) & 0x03; // Slave_responde (1)
+			Command_T = (in >> 4) & 0x03; // Read (0)
+			Module_ID = in & 0x0F;              // MVS (3)                                    // ESTADO 2
+			if (Message_T == 0x00 && Command_T == 0x00 && Module_ID == 0x03){
+				state = Validate_Var;
+			} 
+			else {
+				state = Waiting_Sync;
+			}
+			break;
+		 case Validate_Var:                                                                 // ESTADO 3
+			variable = in;  // FUNCION QUE ESCOJA SI ES TEMP O HUM       
+                                                     
+			if (variable == temperatura_suelo) {  // Temperature (0x05)    
+				
+				MASTER_RESET(); 
+				writeByte(0xCC); 
+				writeByte(0x44); 
+				MASTER_RESET(); 
+				writeByte(0xCC); 
+				writeByte(0xBE);
+					
+				uint8_t LSB = readByte();
+				uint8_t MSB = readByte();
+						
+				int16_t tempData = (MSB << 8) | LSB;
+				volatile float temperature = tempData / 16.0;
+				temperature_int = (uint16_t) (temperature * 10);
+				data_variable = temperature_int;
+
+			} 
+				else if (variable == humedad_suelo) {  // Humidity (0x06) 
+
+					ADC0.COMMAND = ADC_STCONV_bm;
+					while(ADC0.COMMAND & ADC_STCONV_bm){
+					}
+					sensorValue = ADC0.RES; 
+					float voltage = sensorValue * (V_REF / 1023.0); 
+					float humidity = voltage * 100.0 / V_REF;
+					humidity_int = (uint16_t) (humidity * 10); 
+					data_variable = humidity_int;
+
+				} 
+
+			if (in == temperatura_suelo || in == humedad_suelo) {
+				send_Bytes(variable, data_variable);
+				state = Waiting_Sync;
+				
+			}
+			else {
+				state = Waiting_Sync;
+			}
+			break;
+		 default:
+			break;
+	  }
+ }
+ 
+ int main(void) {
+	 initUART(); // Inicializar UART
+//	 uint8_t volatile receivedByte;
+//	 uint8_t data_to_send = 0xAB; // El byte que quiero enviar
+	 setup();    
+	 while (1) {
+		 //PORTA.OUTCLR = PIN7_bm;  // CONFIGURAR PARA ENVIAR
+		 state_machine();
+//		 receivedByte = read_Byte(); // Leer un byte por UART
+		 //PORTA.OUTSET = PIN7_bm;  // CONFIGURAR PARA ENVIAR
+		 _delay_ms(10);
+//		 send_Byte(data_to_send); // Enviar un byte por UART
+//		 while (!(USART0.STATUS & USART_TXCIF_bm));
+		 
+	 }
+	 return 0;
+ }
+ 
